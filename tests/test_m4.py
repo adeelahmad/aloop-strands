@@ -150,3 +150,49 @@ def test_mission_rejects_malformed_proposal(proj):
         [S.w("write_artifact", "docs/agents/next_goal.json", "{}"), "proposed"])})
     sup.execute()
     assert mission.propose_next(sup).status == "blocked"
+
+
+# --- worker errors (live run: provider 504 crashed the CLI / read as "RED added no test file") ---
+class _Flaky(ScriptedModel):
+    """Raises on the first `fails` invocations, then plays the script."""
+    def __init__(self, turns, fails):
+        super().__init__(turns)
+        self.fails = fails
+
+    async def stream(self, *a, **k):
+        if self.fails:
+            self.fails -= 1
+            raise RuntimeError("provider timed out (HTTP 504)")
+        async for ev in super().stream(*a, **k):
+            yield ev
+
+
+def test_worker_model_error_is_retried_and_logged_not_misread(proj):
+    m = S.models()
+    m["green"] = _Flaky(list(m["green"].turns), fails=1)
+    sup = approved(proj, m)
+    r = sup.execute(max_attempts=3)
+    assert r.status == "done", r.reason
+    errs = list(EventLog(proj).query(kind="worker.error"))
+    assert errs and errs[0]["role"] == "green" and "504" in errs[0]["error"]
+
+
+def test_worker_that_always_errors_blocks_with_worker_error(proj):
+    m = S.models()
+    m["red"] = _Flaky(list(m["red"].turns), fails=99)
+    sup = approved(proj, m)
+    r = sup.execute(max_attempts=2)
+    assert r.status == "blocked" and "gate.worker_error" in r.reason
+    assert "src/semver.py" not in git(proj, "ls-tree", "-r", "--name-only", "main")
+
+
+def test_boxed_worker_crash_is_a_worker_error(proj):
+    class Ex:
+        def run(self, argv, cwd, timeout, **kw):
+            return subprocess.CompletedProcess(argv, 1, "", "openai.AuthenticationError: 401 Invalid API key")
+        def __call__(self, argv, cwd, timeout):
+            return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    sup = approved(proj, S.models())
+    sup.box_bin = "box"
+    v = sup._run_worker("red", "S1-01-T1", proj, "python -m pytest -q", Ex(), "x", 1)
+    assert v is not None and v.rule == "gate.worker_error" and "401" in v.reason
