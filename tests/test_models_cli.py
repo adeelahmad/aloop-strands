@@ -64,3 +64,12 @@ def test_worker_env_passes_model_config_but_never_keys(monkeypatch):
     env = models.worker_env()
     assert env["OPENAI_BASE_URL"] == "https://lm.example/v1" and env["ALOOP_MODEL"] == "openai/qwen"
     assert not any("KEY" in k or "TOKEN" in k or "SECRET" in k for k in env)
+
+
+def test_openai_chat_route_uses_chat_completions_endpoint(monkeypatch):
+    from strands.models.openai import OpenAIModel
+    from aloop_strands import models
+    monkeypatch.setenv("ALOOP_MODEL", "openai-chat/cc/claude-sonnet-5")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://router.example/v1")
+    m = models.make_model("green")
+    assert isinstance(m, OpenAIModel) and m.get_config()["model_id"] == "cc/claude-sonnet-5"
