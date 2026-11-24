@@ -28,6 +28,41 @@ def _verify(root: Path) -> int:
     return 2
 
 
+def _supervisor(root: Path, no_box: bool = False):
+    import os
+    from .box import find_box
+    from .models import make_model
+    from .supervisor import Supervisor
+    box_bin = None if no_box else find_box()
+    if not no_box and not box_bin:
+        raise SystemExit("BLOCK no Strands Box binary (set ALOOP_BOX_BIN); workers run only inside Box")
+    return Supervisor(root, model_factory=make_model, box_bin=box_bin,
+                      model_host=os.environ.get("ALOOP_MODEL_HOST"),
+                      secret_env=os.environ.get("ALOOP_MODEL_SECRET_ENV"))
+
+
+def _run(a) -> int:
+    import time
+    from . import approvals
+    root = Path(a.root)
+    sup = _supervisor(root, a.no_box)
+    if a.intent:
+        st = sup.plan(a.intent)
+        if st.status != "awaiting_approval":
+            print(f"BLOCK {st.reason}")
+            return 2
+        print(f"plan ready. approve it in the dashboard or with: aloop-strands approve {st.code}")
+        deadline = time.time() + a.wait
+        while not approvals.approved(root, sup.sprint)[0]:
+            if time.time() > deadline:
+                print("BLOCK plan not approved in time")
+                return 2
+            time.sleep(2)
+    r = sup.execute()
+    print(f"{r.status}: {r.reason or ', '.join(r.merged)}")
+    return 0 if r.status == "done" else 2
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="aloop-strands")
     ap.add_argument("--version", action="version", version=f"aloop-strands {__version__}")
@@ -53,10 +88,18 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status")
     p.add_argument("--root", default=".")
     p.add_argument("--sprint", type=int, default=1)
-    p = sub.add_parser("serve", help="local dashboard on 127.0.0.1")
+    p = sub.add_parser("serve", help="local dashboard (127.0.0.1 by default)")
     p.add_argument("--root", default=".")
     p.add_argument("--port", type=int, default=8787)
+    p.add_argument("--host", default="127.0.0.1", help="0.0.0.0 only inside a container whose port is published on loopback")
+    p = sub.add_parser("run", help="intent -> plan -> wait for human approval -> gated execution")
+    p.add_argument("intent", nargs="?")
+    p.add_argument("--root", default=".")
+    p.add_argument("--wait", type=int, default=86400, help="seconds to wait for plan approval")
+    p.add_argument("--no-box", action="store_true", help="run workers without Strands Box (tests only)")
     a = ap.parse_args(argv)
+    if a.cmd == "run":
+        return _run(a)
     if a.cmd == "plan":
         from .models import make_model
         from .supervisor import Supervisor
@@ -91,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "serve":
         from .dashboard import make_server
-        srv = make_server(Path(a.root), port=a.port)
+        srv = make_server(Path(a.root), port=a.port, host=a.host)
         print(f"dashboard on http://127.0.0.1:{srv.server_address[1]}")
         srv.serve_forever()
         return 0

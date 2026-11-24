@@ -41,3 +41,13 @@ def test_cli_status_prints_code(tmp_path):
     (d / "plan.json").write_text("{}")
     r = run("status", "--root", str(tmp_path))
     assert r.returncode == 0 and "code" in r.stdout
+
+
+def test_cli_run_refuses_without_box(tmp_path, monkeypatch):
+    run("init", str(tmp_path))
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "ALOOP_BOX_BIN"}
+    env["PATH"] = "/usr/bin:/bin"
+    r = subprocess.run([sys.executable, "-m", "aloop_strands.cli", "run", "--root", str(tmp_path)],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode != 0 and "Box" in (r.stdout + r.stderr)

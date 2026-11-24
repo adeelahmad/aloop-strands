@@ -30,8 +30,19 @@ WRAP = ("import subprocess,sys; print('" + SENTINEL + "', file=sys.stderr, flush
 PROTECTED = ("gates", "workflows", "box", ".aladdin")
 
 
+BOX_REV = "8c26868a952e954ba1b99b7d7bf46b67da94f4c5"  # pinned Box source revision (Dockerfile, CI)
+
+
 def find_box() -> str | None:
     return os.environ.get("ALOOP_BOX_BIN") or shutil.which("box")
+
+
+def check_box(box_bin: str) -> None:
+    """aloop-strands drives Box with `box run --config <file>` (Box main at BOX_REV). Released CLIs
+    that only take profiles cannot run our per-task configs: refuse them rather than half-work."""
+    r = subprocess.run([box_bin, "run", "--help"], capture_output=True, text=True, timeout=30)
+    if "--config" not in (r.stdout + r.stderr):
+        raise BoxError(f"{box_bin} has no `run --config`; build Box at {BOX_REV} (see docs/DEPLOY.md)")
 
 
 def _q(s: str) -> str:
@@ -146,6 +157,7 @@ class BoxExecutor:
     temporal rules see the worktree's history."""
 
     def __init__(self, box_bin: str, state_root: Path | None = None, project_root: Path | None = None, log=None):
+        check_box(box_bin)
         # Box's broker socket lives in box_dir and Unix socket paths are short (~108 bytes): keep it near /.
         state_root = state_root or Path(os.environ.get("ALOOP_BOX_STATE", "/tmp/aloop-box"))
         self.box_bin, self.state_root, self.project_root, self.log = box_bin, Path(state_root), project_root, log

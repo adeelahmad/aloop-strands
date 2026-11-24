@@ -302,7 +302,9 @@ def _run_worker(self: Supervisor, role: str, tid: str, wt: Path, test_cmd: str, 
     r = executor.run(["python", "-m", "aloop_strands.worker", json.dumps(spec)], wt, 1800,
                      extra_rw=[str(outbox.resolve())],
                      model_host=None if spec["script"] is not None else self.model_host,
-                     secret_env=self.secret_env)
+                     secret_env=self.secret_env,
+                     env={k: v for k, v in __import__("os").environ.items()
+                          if k in ("ALOOP_MODEL", "ALOOP_MODEL_PLANNING", "ALOOP_MODEL_WORKER", "AWS_REGION")})
     reported = list(_Log(outbox).query(kind="gate.decision"))
     self.log.append("worker.exit", role=role, task=tid, exit=r.returncode, box=True,
                     reported_denials=sum(1 for e in reported if e["verdict"] == "deny"))

@@ -33,7 +33,7 @@ Type the code to approve this exact plan: <input name=code size=10> <button>Appr
 <h2>Gate decisions</h2><table><tr><th>#</th><th>kind</th><th>rule</th><th>verdict</th><th>role</th><th>task</th><th>reason</th></tr>{rows}</table>"""
 
 
-def make_server(root: Path | str, port: int = 8787, sprint: int = 1) -> ThreadingHTTPServer:
+def make_server(root: Path | str, port: int = 8787, sprint: int = 1, host: str = "127.0.0.1") -> ThreadingHTTPServer:
     root = Path(root)
 
     class H(BaseHTTPRequestHandler):
@@ -65,4 +65,4 @@ def make_server(root: Path | str, port: int = 8787, sprint: int = 1) -> Threadin
                 return self._send(403, f"refused: {html.escape(str(e))}")
             self._send(200, "approved. <a href=/>back</a>")
 
-    return ThreadingHTTPServer(("127.0.0.1", port), H)
+    return ThreadingHTTPServer((host, port), H)
