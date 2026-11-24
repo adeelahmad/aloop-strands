@@ -23,7 +23,10 @@ import sysconfig
 from importlib import resources
 from pathlib import Path
 
-WRAP = "import subprocess,sys; sys.exit(subprocess.run(['sh','-c',sys.argv[1]]).returncode)"
+SENTINEL = "ALOOP-BOX-WORKLOAD-STARTED"
+# The sentinel proves the workload started; without it, Box itself failed and there is no result.
+WRAP = ("import subprocess,sys; print('" + SENTINEL + "', file=sys.stderr, flush=True); "
+        "sys.exit(subprocess.run(['sh','-c',sys.argv[1]]).returncode)")
 PROTECTED = ("gates", "workflows", "box", ".aladdin")
 
 
@@ -165,16 +168,17 @@ class BoxExecutor:
         r = subprocess.run([self.box_bin, "run", "--config", str(cfg)], capture_output=True, text=True,
                            timeout=timeout, cwd=cdir)
         fatal = [ln for ln in r.stderr.splitlines() if ln.startswith("strands-box: error")]
-        if fatal:
+        if fatal or SENTINEL not in r.stderr:
+            detail = fatal[0] if fatal else "\n".join(r.stderr.splitlines()[-15:])
             if self.log is not None:
-                self.log.append("box.error", argv=argv, error=fatal[0][:500])
-            raise BoxError(fatal[0])
+                self.log.append("box.error", argv=argv, error=detail[:2000])
+            raise BoxError(f"box did not run the workload (exit {r.returncode}): {detail}")
         if self.log is not None:
             denials = [ln for ln in r.stderr.splitlines() if "policy denied" in ln or "[default-deny]" in ln]
             self.log.append("box.run", argv=argv, exit=r.returncode, denials=denials[:20],
                             worktree=os.path.realpath(cwd))
         err = "\n".join(ln for ln in r.stderr.splitlines() if not ln.startswith("strands-box:")
-                        and not ln.startswith("  "))
+                        and not ln.startswith("  ") and ln != SENTINEL)
         return subprocess.CompletedProcess(argv, r.returncode, r.stdout, err)
 
     __call__ = lambda self, cmd, cwd, timeout: self.run(list(cmd), Path(cwd), timeout)  # noqa: E731
