@@ -195,3 +195,38 @@ def test_dashboard_binds_loopback_only(proj):
         assert srv.server_address[0] == "127.0.0.1"
     finally:
         srv.server_close()
+
+
+class _Crash(ScriptedModel):
+    async def stream(self, *a, **k):
+        raise RuntimeError("Model unloaded")
+        yield  # pragma: no cover
+
+
+def test_model_crash_in_planning_blocks_and_is_logged(proj):
+    models = planning_models()
+    models["standards"] = _Crash([])
+    sup = supervisor.Supervisor(proj, models=models)
+    st = sup.plan("a semver parser")
+    assert st.status == "blocked" and "gate.model_error" in st.reason
+    assert any(e["kind"] == "plan.blocked" for e in EventLog(proj).query())
+
+
+def test_blocked_plan_cannot_be_approved_and_status_says_so(proj, capsys):
+    from aloop_strands import cli
+    models = planning_models()
+    models["standards"] = ScriptedModel([write("docs/agents/standards.md", "# no command\n"), "done"])
+    st = supervisor.Supervisor(proj, models=models).plan("a semver parser")
+    assert st.status == "blocked"
+    with pytest.raises(approvals.ApprovalRefused):
+        approvals.approve(proj, sprint=1, typed=approvals.code_for(proj, 1), actor="human:cli")
+    cli.main(["status", "--root", str(proj)])
+    out = capsys.readouterr().out
+    assert "no verified plan" in out and "code" not in out
+
+
+def test_plan_edited_after_verification_cannot_be_approved(proj):
+    sup, state = _planned(proj)
+    (proj / "docs/agents/standards.md").write_text("# Standards\ntest_command: true\n")
+    with pytest.raises(approvals.ApprovalRefused):
+        approvals.approve(proj, sprint=1, typed=approvals.code_for(proj, 1), actor="human:cli")
