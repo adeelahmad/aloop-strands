@@ -9,7 +9,7 @@ description = "Aladdin's Loop on the Strands Harness SDK. Models explore. Gates 
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-  "strands-agents==1.66.0",   # https://strandsagents.com/docs/user-guide/sdk/
+  "strands-agents[openai]==1.66.0",   # https://strandsagents.com/docs/user-guide/sdk/
   "strands-harness==0.5.0",   # https://strandsagents.com/docs/user-guide/harness/
 ]
 
