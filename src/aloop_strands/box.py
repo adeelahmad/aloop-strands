@@ -67,12 +67,18 @@ def python_grants() -> tuple[list[str], str, str]:
     reads.append(str(Path(real).parent))
     venv_bin = Path(sys.prefix) / "bin"
     venv_py = str(venv_bin) if (venv_bin / "python").exists() else str(Path(real).parent)
-    seen, out = set(), []
-    for r in reads:
-        if r not in seen:
-            seen.add(r)
-            out.append(r)
-    return out, real, venv_py
+    return _outermost(reads), real, venv_py
+
+
+def _outermost(paths: list[str]) -> list[str]:
+    """Drop duplicates and paths inside another listed path: Box refuses nested same-kind grants."""
+    norm = [p.rstrip("/") or "/" for p in paths]
+    out = []
+    for p in norm:
+        inside = any(q != p and (p + "/").startswith(q.rstrip("/") + "/") for q in norm)
+        if not inside and p not in out:
+            out.append(p)
+    return out
 
 
 def policy_template(project_root: Path | None = None) -> str:
@@ -115,8 +121,8 @@ env = {env_s}
 
 [agent.filesystem]
 exec = {_arr([real])}
-read = {_arr(reads + rw)}
-write = {_arr(rw)}
+read = {_arr(_outermost(reads + rw))}
+write = {_arr(_outermost(rw))}
 deny = {_arr(deny)}
 """
     # A tool answers the name its command file has, so each name points at its own file.
@@ -126,8 +132,8 @@ deny = {_arr(deny)}
 command = {_arr([os.path.join(venv_py, name)])}
 env = {env_s}
 [tool.{name}.filesystem]
-read = {_arr(reads + rw)}
-write = {_arr(rw)}
+read = {_arr(_outermost(reads + rw))}
+write = {_arr(_outermost(rw))}
 deny = {_arr(deny)}
 """
     toml += f"""
@@ -136,7 +142,7 @@ command = ["/usr/bin/git"]
 env = {env_s}
 [tool.git.filesystem]
 read = {_arr([wt, tmp, '/usr/share/git-core', '/usr/lib/git-core', *extra_rw])}
-write = {_arr(rw)}
+write = {_arr(_outermost(rw))}
 deny = {_arr(deny)}
 """
     if model_host:

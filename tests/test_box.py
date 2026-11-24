@@ -102,3 +102,15 @@ def test_box_config_error_raises_not_a_result(tmp_path, wt):
     e = box.BoxExecutor(BOX, tmp_path / "boxes", project_root=root)
     with pytest.raises(box.BoxError):
         e(["python", "-m", "pytest"], wt, 60)
+
+
+def test_read_grants_never_nest():
+    # Box refuses a grant inside another grant of the same kind (CI: stdlib under sys.prefix).
+    from aloop_strands.box import _outermost
+    got = _outermost(["/opt/py/lib/python3.13", "/opt/py", "/opt/py/bin", "/srv/x", "/opt/pyx"])
+    assert got == ["/opt/py", "/srv/x", "/opt/pyx"]
+    from pathlib import Path
+    toml, _ = box.render(worktree=Path("/tmp/wt"), state_dir=Path("/tmp/st"), argv=["python"])
+    import tomllib
+    reads = tomllib.loads(toml)["agent"]["filesystem"]["read"]
+    assert all(not (a != b and (a + "/").startswith(b.rstrip("/") + "/")) for a in reads for b in reads)
