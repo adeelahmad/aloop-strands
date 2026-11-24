@@ -45,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("code")
     p.add_argument("--root", default=".")
     p.add_argument("--sprint", type=int, default=1)
+    p = sub.add_parser("door", help="authorize a one-way door for one task (human only)")
+    p.add_argument("task")
+    p.add_argument("door")
+    p.add_argument("code")
+    p.add_argument("--root", default=".")
     p = sub.add_parser("status")
     p.add_argument("--root", default=".")
     p.add_argument("--sprint", type=int, default=1)
@@ -69,6 +74,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"BLOCK {e}")
             return 2
         print("approved")
+        return 0
+    if a.cmd == "door":
+        from . import doors
+        try:
+            doors.authorize(Path(a.root), a.task, a.door, a.code, actor="human:cli")
+        except doors.DoorRefused as e:
+            print(f"BLOCK {e}")
+            return 2
+        print("authorized")
         return 0
     if a.cmd == "status":
         from . import approvals

@@ -12,6 +12,7 @@ ROLE_TOOLS: dict[str, frozenset[str]] = {
     "intake": frozenset({"read_file", "list_files", "write_artifact"}),
     "standards": frozenset({"read_file", "list_files", "write_artifact"}),
     "planner": frozenset({"read_file", "list_files", "write_artifact"}),
+    "mission_planner": frozenset({"read_file", "list_files", "write_artifact"}),
     "red": frozenset({"read_file", "list_files", "write_file", "edit_file", "run_tests"}),
     "scaffold": frozenset({"read_file", "list_files", "write_file", "edit_file", "run_tests"}),
     "green": frozenset({"read_file", "list_files", "write_file", "edit_file", "run_tests"}),

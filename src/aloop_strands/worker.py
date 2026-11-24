@@ -28,11 +28,20 @@ def main(argv: list[str] | None = None) -> int:
     else:
         from .models import make_model
         model = make_model(spec["role"])
+    from .budget import BudgetIntervention, Budgets
+    from .events import EventLog
+    b = spec.get("budgets") or {}
+    bi = BudgetIntervention(Budgets(**b) if b else Budgets(), EventLog(Path(spec["outbox"])), spec["role"],
+                            spec["task"], Path(spec["worktree"]))
+    bi.run_before = 0  # the host passes the remaining run budget
     agent = roles.build_agent(spec["role"], model=model, task=spec["task"], worktree=Path(spec["worktree"]),
                               project_root=Path(spec["outbox"]), check_pins=False,
-                              test_cmd=spec["test_cmd"], executor=shell_executor)
+                              test_cmd=spec["test_cmd"], executor=shell_executor, extra_interventions=[bi])
     result = agent(spec["prompt"])
-    print(json.dumps({"stop_reason": str(result.stop_reason), "role": spec["role"], "task": spec["task"]}))
+    u = agent.event_loop_metrics.accumulated_usage
+    print(json.dumps({"stop_reason": str(result.stop_reason), "role": spec["role"], "task": spec["task"],
+                      "total_tokens": int(u.get("totalTokens", 0)),
+                      "breach": {"rule": bi.breached.rule, "reason": bi.breached.reason} if bi.breached else None}))
     return 0
 
 

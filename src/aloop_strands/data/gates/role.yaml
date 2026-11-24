@@ -29,6 +29,10 @@ roles:
   - list_files
   - read_file
   - write_artifact
+  mission_planner:
+  - list_files
+  - read_file
+  - write_artifact
   planner:
   - list_files
   - read_file

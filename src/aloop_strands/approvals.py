@@ -65,3 +65,8 @@ def planned_tasks(root: Path, sprint: int) -> set[str]:
     p = plan_files(root, sprint)[2]
     plan = json.loads(p.read_text())
     return {t["id"] for s in plan["stories"] for t in s["tasks"]}
+
+
+def planned_task_map(root: Path, sprint: int) -> dict[str, dict]:
+    plan = json.loads(plan_files(root, sprint)[2].read_text())
+    return {t["id"]: t for s in plan["stories"] for t in s["tasks"]}

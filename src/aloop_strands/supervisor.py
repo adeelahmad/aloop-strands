@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import approvals, pins, roles
+from . import approvals, doors, pins, roles
 from .events import EventLog
 from .gates import base, plan_gates
 from .gates.tool_gates import ROLE_TOOLS
 
 PLANNING = ("intake", "standards", "planner")
+NO_APPROVAL = PLANNING + ("mission_planner",)
 EXECUTION = ("red", "scaffold", "green", "structural_review", "final_verification")
 
 
@@ -27,7 +28,9 @@ class PlanState:
 class Supervisor:
     def __init__(self, root: Path | str, models: dict | None = None, model_factory: Callable | None = None,
                  sprint: int = 1, box_bin: str | None = None, model_host: str | None = None,
-                 secret_env: str | None = None):
+                 secret_env: str | None = None, budgets=None):
+        from .budget import Budgets
+        self.budgets = budgets or Budgets()
         self.root = Path(root)
         self.box_bin, self.model_host, self.secret_env = box_bin, model_host, secret_env
         self.models = models or {}
@@ -50,15 +53,29 @@ class Supervisor:
             diff = pins.verify(self.root)
             if diff:
                 return base.Verdict.deny("gate.pins", f"gate/workflow files changed without approval: {diff}")
-            if role in PLANNING:
+            if role in NO_APPROVAL:
                 return base.Verdict.ok("gate.dispatch")
             m = re.match(r"^S(\d+)-", task or "")
             sprint = int(m.group(1)) if m else self.sprint
             ok, why = approvals.approved(self.root, sprint)
             if not ok:
                 return base.Verdict.deny("gate.approval", why)
-            if role in ("red", "scaffold", "green") and task not in approvals.planned_tasks(self.root, sprint):
-                return base.Verdict.deny("gate.approval", f"task {task!r} is not in the approved plan")
+            if role in ("red", "scaffold", "green", "developer"):
+                tasks = approvals.planned_task_map(self.root, sprint)
+                if task not in tasks:
+                    return base.Verdict.deny("gate.approval", f"task {task!r} is not in the approved plan")
+                door = doors.classify(tasks[task])
+                if doors.is_wall(door):
+                    return base.Verdict.deny("gate.door", f"task {task} is a wall ({door}); it never runs")
+                if door and not doors.authorized(self.root, task, door):
+                    return base.Verdict.deny("gate.door", f"task {task} crosses the one-way door {door!r}; a human "
+                                             f"authorizes it with: aloop-strands door {task} {door} "
+                                             f"{doors.code_for(self.root, task, door)}")
+                if not door:
+                    self.log.append("door.two_way", task=task, reason="reversible: decided, not asked")
+            from .budget import run_used
+            if run_used(self.log) >= self.budgets.run_tokens:
+                return base.Verdict.deny("gate.budget.run", f"run budget {self.budgets.run_tokens} tokens spent; admission closed")
             return base.Verdict.ok("gate.dispatch")
         ctx = base.GateContext(role=role, task=task or "-", project_root=self.root, worktree=self.root,
                                tool="dispatch", input={}, log=self.log)
@@ -73,6 +90,7 @@ class Supervisor:
         agent = roles.build_agent(role, model=self.model_for(role), task="plan", worktree=self.root,
                                   project_root=self.root)
         agent(prompt)
+        self._log_usage(agent, role, "plan", 1)
         check = {"intake": lambda: plan_gates.intake_verify(self.root),
                  "standards": lambda: plan_gates.standards_verify(self.root),
                  "planner": lambda: plan_gates.plan_verify(self.root, self.sprint)}[role]
@@ -191,7 +209,12 @@ def _run_task(self: Supervisor, task: dict, steps, test_cmd: str, max_attempts: 
         why = None
         for attempt in range(1, max_attempts + 1):
             self.log.append("dispatch", role=step.role, task=tid, attempt=attempt, box=bool(self.box_bin))
-            self._run_worker(step.role, tid, wt, test_cmd, executor, _prompt(task, step, why))
+            bv = self._run_worker(step.role, tid, wt, test_cmd, executor, _prompt(task, step, why), attempt)
+            if bv is not None:  # hard budget breach: partial work is discarded, never merged
+                project.git(wt, "reset", "-q", "--hard", step_base)
+                project.git(wt, "clean", "-qfdx")
+                self.log.append("task.blocked", task=tid, step=step.id, reason=f"{bv.rule}: {bv.reason}", discarded=True)
+                return ExecState("blocked", f"{tid} {step.id}: {bv.rule}: {bv.reason}")
             base_commit = start if step.role in ("structural_review", "developer") else step_base
             sctx = sg.StopContext(role=step.role, task=tid, worktree=wt, base=base_commit, log=self.log,
                                   test_cmd=shlex.split(test_cmd), red_commit=commits.get("red"), executor=executor)
@@ -236,7 +259,9 @@ def _sprint_step(self: Supervisor, step, test_cmd: str, max_attempts: int, execu
     project.git(self.root, "worktree", "add", "-q", "--detach", str(wt), "main")
     try:
         self.log.append("dispatch", role=step.role, task=tid, attempt=1, box=bool(self.box_bin))
-        self._run_worker(step.role, tid, wt, test_cmd, executor, "Run the full test matrix on main and report.")
+        bv = self._run_worker(step.role, tid, wt, test_cmd, executor, "Run the full test matrix on main and report.", 1)
+        if bv is not None:
+            return bv
         sctx = sg.StopContext(role=step.role, task=tid, worktree=wt, base="HEAD", log=self.log,
                               test_cmd=shlex.split(test_cmd), executor=executor)
         return self._stop(step, tid, wt, sctx)
@@ -244,12 +269,25 @@ def _sprint_step(self: Supervisor, step, test_cmd: str, max_attempts: int, execu
         project.git(self.root, "worktree", "remove", "--force", str(wt))
 
 
-def _run_worker(self: Supervisor, role: str, tid: str, wt: Path, test_cmd: str, executor, prompt: str) -> None:
+def _log_usage(self: Supervisor, agent, role: str, tid: str, attempt: int) -> None:
+    u = agent.event_loop_metrics.accumulated_usage
+    self.log.append("usage", role=role, task=tid, attempt=attempt, total_tokens=int(u.get("totalTokens", 0)),
+                    input_tokens=int(u.get("inputTokens", 0)), output_tokens=int(u.get("outputTokens", 0)),
+                    estimated=False, model=str((agent.model.get_config() or {}).get("model_id", "?")))
+
+
+def _run_worker(self: Supervisor, role: str, tid: str, wt: Path, test_cmd: str, executor, prompt: str,
+                attempt: int = 1):
+    """Runs one worker attempt. Returns the budget verdict when the hard limit was breached, else None."""
     if not self.box_bin:
+        from .budget import BudgetIntervention
+        bi = BudgetIntervention(self.budgets, self.log, role, tid, wt)
         agent = roles.build_agent(role, model=self.model_for(role), task=tid, worktree=wt,
-                                  project_root=self.root, test_cmd=test_cmd, executor=executor)
+                                  project_root=self.root, test_cmd=test_cmd, executor=executor,
+                                  extra_interventions=[bi])
         agent(prompt)
-        return
+        self._log_usage(agent, role, tid, attempt)
+        return bi.breached
     import sys as _sys
     from .events import EventLog as _Log
     from .scripted import ScriptedModel
@@ -258,6 +296,8 @@ def _run_worker(self: Supervisor, role: str, tid: str, wt: Path, test_cmd: str, 
     model = self.models.get(role)
     spec = {"role": role, "task": tid, "worktree": str(wt.resolve()), "outbox": str(outbox.resolve()),
             "test_cmd": test_cmd, "prompt": prompt,
+            "budgets": {"attempt_tokens": self.budgets.attempt_tokens,
+                        "run_tokens": max(0, self.budgets.run_tokens - __import__("aloop_strands.budget", fromlist=["x"]).run_used(self.log))},
             "script": list(model.turns) if isinstance(model, ScriptedModel) else None}
     r = executor.run(["python", "-m", "aloop_strands.worker", json.dumps(spec)], wt, 1800,
                      extra_rw=[str(outbox.resolve())],
@@ -266,9 +306,21 @@ def _run_worker(self: Supervisor, role: str, tid: str, wt: Path, test_cmd: str, 
     reported = list(_Log(outbox).query(kind="gate.decision"))
     self.log.append("worker.exit", role=role, task=tid, exit=r.returncode, box=True,
                     reported_denials=sum(1 for e in reported if e["verdict"] == "deny"))
+    last = (r.stdout or "").strip().splitlines()[-1:] or ["{}"]
+    try:
+        out = json.loads(last[0])
+    except ValueError:
+        out = {}
+    # Usage the worker reports from inside the box is marked as such (the box is the trust boundary).
+    self.log.append("usage", role=role, task=tid, attempt=attempt, total_tokens=int(out.get("total_tokens", 0)),
+                    estimated=False, reported_by="worker-in-box")
+    if out.get("breach"):
+        return base.Verdict.deny(out["breach"]["rule"], out["breach"]["reason"])
+    return None
 
 
 Supervisor._run_worker = _run_worker
+Supervisor._log_usage = _log_usage
 Supervisor.execute = _execute
 Supervisor._run_task = _run_task
 Supervisor._merge = _merge
