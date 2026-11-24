@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aloop-strands"
+version = "0.1.0"
+description = "Aladdin's Loop on the Strands Harness SDK. Models explore. Gates decide."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "strands-agents==1.66.0",   # https://strandsagents.com/docs/user-guide/sdk/
+  "strands-harness==0.5.0",   # https://strandsagents.com/docs/user-guide/harness/
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+dashboard = ["fastapi>=0.110", "uvicorn>=0.29"]
+
+[project.scripts]
+aloop-strands = "aloop_strands.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools.package-data]
+aloop_strands = ["data/**/*"]
