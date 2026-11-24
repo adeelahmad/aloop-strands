@@ -114,3 +114,14 @@ def test_read_grants_never_nest():
     import tomllib
     reads = tomllib.loads(toml)["agent"]["filesystem"]["read"]
     assert all(not (a != b and (a + "/").startswith(b.rstrip("/") + "/")) for a in reads for b in reads)
+
+
+def test_exec_covers_python_extension_modules():
+    # CI: lib-dynload .so failed to map (no exec grant) when Python lives outside /usr.
+    import sysconfig, tomllib
+    from pathlib import Path
+    toml, _ = box.render(worktree=Path("/tmp/wt"), state_dir=Path("/tmp/st"), argv=["python"])
+    ex = tomllib.loads(toml)["agent"]["filesystem"]["exec"]
+    dyn = os.path.realpath(sysconfig.get_paths()["platstdlib"]) + "/lib-dynload/x.so"
+    assert any(dyn.startswith(e.rstrip("/") + "/") for e in ex), ex
+    assert "/tmp/wt" not in ex

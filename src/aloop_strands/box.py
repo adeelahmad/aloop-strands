@@ -120,7 +120,7 @@ workspace = {_q(wt)}
 env = {env_s}
 
 [agent.filesystem]
-exec = {_arr([real])}
+exec = {_arr(_outermost([os.path.realpath(p) for p in (real, *reads)]))}
 read = {_arr(_outermost(reads + rw))}
 write = {_arr(_outermost(rw))}
 deny = {_arr(deny)}
