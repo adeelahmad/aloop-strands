@@ -20,6 +20,7 @@ PROMPTS = {
     "red": "Write failing tests for the task. Tests only; they must fail by assertion.",
     "scaffold": "Create each production symbol the tests reference once, as a stub.",
     "green": "Make the task's tests pass with the least code. Never change tests.",
+    "developer": "Implement the task and its tests. The suite must pass.",
     "structural_review": "Find orphan, duplicate or parallel code. Report only.",
     "final_verification": "Run the full test matrix and report.",
 }

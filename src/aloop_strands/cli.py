@@ -11,15 +11,8 @@ from . import __version__, pins
 
 
 def _init(root: Path) -> int:
-    root.mkdir(parents=True, exist_ok=True)
-    data = resources.files("aloop_strands") / "data"
-    for sub in ("workflows", "gates"):
-        dst = root / sub
-        dst.mkdir(exist_ok=True)
-        for f in (data / sub).iterdir():
-            if f.is_file() and not (dst / f.name).exists():
-                (dst / f.name).write_bytes(f.read_bytes())
-    pins.init(root)
+    from .project import init
+    init(root)
     print(f"initialized {root}")
     return 0
 

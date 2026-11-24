@@ -15,6 +15,7 @@ ROLE_TOOLS: dict[str, frozenset[str]] = {
     "red": frozenset({"read_file", "list_files", "write_file", "edit_file", "run_tests"}),
     "scaffold": frozenset({"read_file", "list_files", "write_file", "edit_file", "run_tests"}),
     "green": frozenset({"read_file", "list_files", "write_file", "edit_file", "run_tests"}),
+    "developer": frozenset({"read_file", "list_files", "write_file", "edit_file", "run_tests"}),
     "structural_review": frozenset({"read_file", "list_files", "run_tests", "write_report"}),
     "final_verification": frozenset({"read_file", "list_files", "run_tests", "write_report"}),
 }
@@ -106,7 +107,9 @@ COMMIT_WINDOW_S = 3600
 
 def commit_gate(ctx: GateContext) -> Verdict:
     """Temporal rule: commit only if this exact tree passed its tests within the last hour,
-    with no failing run after it. Mirrors the Box policy.dw rule at the host layer."""
+    with no failing run after it. Mirrors the Box policy.dw rule at the host layer.
+    RED and SCAFFOLD commits record a red state: they need `expect="fail"`, a failing run of
+    this exact tree recorded by the host within the hour."""
     if ctx.tool != "commit":
         return Verdict.ok("gate.commit_after_tests")
     ok, bad = ctx.log.verify()
@@ -117,8 +120,10 @@ def commit_gate(ctx: GateContext) -> Verdict:
     for e in ctx.log.query(task=ctx.task):
         if e["kind"] in ("tests.passed", "tests.failed") and e.get("tree") == tree:
             last = e
-    if last is None or last["kind"] != "tests.passed":
-        return Verdict.deny("gate.commit_after_tests", "no passing test run for this exact tree")
+    want = "tests.failed" if ctx.input.get("expect") == "fail" else "tests.passed"
+    if last is None or last["kind"] != want:
+        return Verdict.deny("gate.commit_after_tests",
+                            f"no {'failing' if want == 'tests.failed' else 'passing'} test run for this exact tree")
     if ctx.now - last["ts"] > COMMIT_WINDOW_S:
         return Verdict.deny("gate.commit_after_tests", "last passing test run is older than one hour")
     return Verdict.ok("gate.commit_after_tests")

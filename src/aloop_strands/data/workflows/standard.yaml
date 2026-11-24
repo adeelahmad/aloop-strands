@@ -1,6 +1,6 @@
 # Standard development: implement, then tests must pass; still gated, never "done" on a model's word.
 name: standard
 steps:
-  - {id: implement,  role: green,              gate: gate.tests_pass}
+  - {id: implement,  role: developer,          gate: gate.tests_pass}
   - {id: review,     role: structural_review,  gate: gate.structural}
   - {id: final,      role: final_verification, gate: gate.final}

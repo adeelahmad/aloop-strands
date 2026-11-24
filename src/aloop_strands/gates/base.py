@@ -69,12 +69,17 @@ def head_commit(path: Path) -> str:
 
 
 def evaluate(gates: list[Gate], ctx: GateContext) -> Verdict:
-    verdict = Verdict.ok("gate.all", "every gate passed")
+    passed: list[Verdict] = []
+    verdict = None
     for g in gates:
         v = run_gate(g, ctx)
         if not v.allow:
             verdict = v
             break
+        passed.append(v)
+    if verdict is None:
+        verdict = passed[0] if len(passed) == 1 else Verdict.ok(
+            "+".join(v.rule for v in passed) or "gate.none", "every gate passed")
     rec = dict(rule=verdict.rule, verdict="allow" if verdict.allow else "deny", reason=verdict.reason,
                role=ctx.role, task=ctx.task, tool=ctx.tool, commit=head_commit(ctx.worktree))
     try:

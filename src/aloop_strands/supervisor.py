@@ -92,3 +92,157 @@ class Supervisor:
         code = approvals.code_for(self.root, self.sprint)
         self.log.append("plan.ready", sprint=self.sprint, plan_sha=approvals.plan_sha(self.root, self.sprint))
         return PlanState("awaiting_approval", self.sprint, code=code)
+
+
+# ----------------------------------------------------------------------------------------
+# Execution (M3): one worktree per task, every step gated, merge only when all gates pass.
+# ----------------------------------------------------------------------------------------
+import json  # noqa: E402
+import shlex  # noqa: E402
+
+from . import project, workflows  # noqa: E402
+from .gates import stop_gates as sg  # noqa: E402
+from .gates.tool_gates import commit_gate  # noqa: E402
+from .tools import local_executor  # noqa: E402
+from .worktree import tree_hash  # noqa: E402
+
+
+@dataclass
+class ExecState:
+    status: str              # done | blocked
+    reason: str = ""
+    merged: tuple = ()
+
+
+def _test_cmd(root: Path) -> str:
+    m = re.search(r"^test_command:\s*(.+)$", (root / "docs" / "agents" / "standards.md").read_text(), re.M)
+    return m.group(1).strip() if m else "python -m pytest -q"
+
+
+def _execute(self: Supervisor, max_attempts: int = 3, executor=local_executor) -> ExecState:
+    root, sprint = self.root, self.sprint
+    ok, why = approvals.approved(root, sprint)
+    if not ok:
+        self.log.append("execute.refused", rule="gate.approval", verdict="deny", reason=why)
+        return ExecState("blocked", f"gate.approval: {why}")
+    plan = json.loads(approvals.plan_files(root, sprint)[2].read_text())
+    steps = workflows.load(root, plan["workflow"])
+    test_cmd = _test_cmd(root)
+    # Record the approved plan on main (content unchanged, so the approval still holds).
+    project.git(root, "add", "docs/agents")
+    project.git(root, "commit", "-qm", f"plan S{sprint} approved", "--allow-empty")
+    merged = []
+    for story in plan["stories"]:
+        for task in story["tasks"]:
+            st = self._run_task(task, [s for s in steps if not s.sprint_level], test_cmd, max_attempts, executor)
+            if st.status != "done":
+                return ExecState("blocked", st.reason, tuple(merged))
+            merged.append(task["id"])
+    for step in [s for s in steps if s.sprint_level]:
+        v = self._sprint_step(step, test_cmd, max_attempts, executor)
+        if not v.allow:
+            return ExecState("blocked", f"{v.rule}: {v.reason}", tuple(merged))
+    self.log.append("sprint.done", sprint=sprint, merged=merged)
+    return ExecState("done", "", tuple(merged))
+
+
+def _prompt(task: dict, step, why: str | None) -> str:
+    p = (f"Task {task['id']}: {task['title']}\nTests: {', '.join(task['tests'])}\n"
+         f"Targets: {', '.join(task['targets'])}\nYour step: {step.id} ({step.role}).")
+    return p + (f"\nThe gate rejected the last attempt: {why}\nFix exactly that." if why else "")
+
+
+def _host_commit(self: Supervisor, wt: Path, role: str, task: str, msg: str, expect: str) -> base.Verdict:
+    ctx = base.GateContext(role="host", task=task, project_root=self.root, worktree=wt, tool="commit",
+                           input={"tree": tree_hash(wt), "expect": expect}, log=self.log)
+    v = base.evaluate([commit_gate], ctx)
+    if v.allow:
+        project.git(wt, "add", "-A")
+        project.git(wt, "commit", "-qm", f"{msg}\n\naloop-task: {task}\naloop-role: {role}", "--allow-empty")
+    return v
+
+
+def _stop(self: Supervisor, step, task_id: str, wt: Path, sctx: sg.StopContext) -> base.Verdict:
+    ctx = base.GateContext(role=step.role, task=task_id, project_root=self.root, worktree=wt, tool="<stop>",
+                           input={}, log=self.log)
+    gate = workflows.GATES[step.gate]
+    return base.evaluate([lambda _c: gate(sctx)], ctx)
+
+
+def _run_task(self: Supervisor, task: dict, steps, test_cmd: str, max_attempts: int, executor) -> ExecState:
+    tid = task["id"]
+    wt = self.root / ".worktrees" / tid
+    project.git(self.root, "worktree", "add", "-q", "-b", f"aloop/{tid}", str(wt), "main")
+    start = project.git(wt, "rev-parse", "HEAD").strip()
+    commits = {"start": start}
+    for step in steps:
+        v = self.dispatch_gate(step.role, tid)
+        if not v.allow:
+            return ExecState("blocked", f"{v.rule}: {v.reason}")
+        step_base = project.git(wt, "rev-parse", "HEAD").strip()
+        why = None
+        for attempt in range(1, max_attempts + 1):
+            self.log.append("dispatch", role=step.role, task=tid, attempt=attempt)
+            agent = roles.build_agent(step.role, model=self.model_for(step.role), task=tid, worktree=wt,
+                                      project_root=self.root, test_cmd=test_cmd, executor=executor)
+            agent(_prompt(task, step, why))
+            base_commit = start if step.role in ("structural_review", "developer") else step_base
+            sctx = sg.StopContext(role=step.role, task=tid, worktree=wt, base=base_commit, log=self.log,
+                                  test_cmd=shlex.split(test_cmd), red_commit=commits.get("red"), executor=executor)
+            v = self._stop(step, tid, wt, sctx)
+            if step.role == "structural_review" and v.allow:
+                sg._run(sctx)  # host test run of the exact tree to be merged
+            expect = "fail" if step.role in ("red", "scaffold") else "pass"
+            c = self._host_commit(wt, step.role, tid, f"{tid} {step.id}", expect)
+            if v.allow and c.allow:
+                commits[step.id] = project.git(wt, "rev-parse", "HEAD").strip()
+                break
+            why = f"{v.rule}: {v.reason}" if not v.allow else f"{c.rule}: {c.reason}"
+        else:
+            self.log.append("task.blocked", task=tid, step=step.id, reason=why)
+            return ExecState("blocked", f"{tid} {step.id}: {why}")
+    return self._merge(tid, wt, test_cmd, executor)
+
+
+def _merge(self: Supervisor, tid: str, wt: Path, test_cmd: str, executor) -> ExecState:
+    project.git(wt, "merge", "-q", "--no-edit", "main")
+    sctx = sg.StopContext(role="host", task=tid, worktree=wt, base="main", log=self.log,
+                          test_cmd=shlex.split(test_cmd), executor=executor)
+    sg._run(sctx)
+    v = base.evaluate([commit_gate], base.GateContext(
+        role="host", task=tid, project_root=self.root, worktree=wt, tool="commit",
+        input={"tree": tree_hash(wt), "expect": "pass"}, log=self.log))
+    if not v.allow:
+        return ExecState("blocked", f"merge {tid}: {v.rule}: {v.reason}")
+    project.git(self.root, "merge", "-q", "--ff-only", f"aloop/{tid}")
+    head = project.git(self.root, "rev-parse", "main").strip()
+    self.log.append("merge", task=tid, commit=head, rule="gate.merge", verdict="allow", reason="all gates passed")
+    project.git(self.root, "worktree", "remove", "--force", str(wt))
+    return ExecState("done")
+
+
+def _sprint_step(self: Supervisor, step, test_cmd: str, max_attempts: int, executor) -> base.Verdict:
+    tid = f"S{self.sprint}-FINAL"
+    v = self.dispatch_gate(step.role, tid)
+    if not v.allow:
+        return v
+    wt = self.root / ".worktrees" / tid
+    project.git(self.root, "worktree", "add", "-q", "--detach", str(wt), "main")
+    try:
+        self.log.append("dispatch", role=step.role, task=tid, attempt=1)
+        agent = roles.build_agent(step.role, model=self.model_for(step.role), task=tid, worktree=wt,
+                                  project_root=self.root, test_cmd=test_cmd, executor=executor)
+        agent("Run the full test matrix on main and report.")
+        sctx = sg.StopContext(role=step.role, task=tid, worktree=wt, base="HEAD", log=self.log,
+                              test_cmd=shlex.split(test_cmd), executor=executor)
+        return self._stop(step, tid, wt, sctx)
+    finally:
+        project.git(self.root, "worktree", "remove", "--force", str(wt))
+
+
+Supervisor.execute = _execute
+Supervisor._run_task = _run_task
+Supervisor._merge = _merge
+Supervisor._host_commit = _host_commit
+Supervisor._stop = _stop
+Supervisor._sprint_step = _sprint_step

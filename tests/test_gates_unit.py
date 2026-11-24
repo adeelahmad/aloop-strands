@@ -165,3 +165,11 @@ def test_unrecordable_decision_is_a_deny(proj):
     v = base.evaluate(tg.TOOL_GATES, c)
     assert not v.allow and v.rule == "gate.log_integrity"
     assert (c.log.path.with_name("alarms.jsonl")).exists()
+
+
+def test_shipped_role_config_matches_code():
+    from importlib import resources
+    import yaml
+    d = yaml.safe_load((resources.files("aloop_strands") / "data" / "gates" / "role.yaml").read_text())
+    assert {r: frozenset(t) for r, t in d["roles"].items()} == tg.ROLE_TOOLS
+    assert tuple(d["protected_paths"]) == tg.PROTECTED
