@@ -104,11 +104,7 @@ class Supervisor:
 
     def plan(self, intent: str) -> PlanState:
         self.log.append("intent", text=intent, sprint=self.sprint)
-        prompts = {
-            "intake": f"Intent: {intent}\nWrite docs/agents/intent.json with actor, want, why, success, failure.",
-            "standards": "Write docs/agents/standards.md with language and a `test_command:` line.",
-            "planner": f"Write docs/agents/sprint{self.sprint}/plan.json: workflow, stories, tasks (id S{self.sprint}-NN-Tk, tests, targets).",
-        }
+        prompts = planning_prompts(intent, self.sprint)
         for role in PLANNING:
             v = self._run_planning_role(role, prompts[role])
             if not v.allow:
@@ -117,6 +113,33 @@ class Supervisor:
         code = approvals.code_for(self.root, self.sprint)
         self.log.append("plan.ready", sprint=self.sprint, plan_sha=approvals.plan_sha(self.root, self.sprint))
         return PlanState("awaiting_approval", self.sprint, code=code)
+
+
+def planning_templates(sprint: int) -> dict[str, str]:
+    """One exact, gate-valid example per planning file (tests/test_planning_prompts.py)."""
+    intent = {"actor": "a developer", "want": "a parser for version strings like 1.2.3",
+              "why": "compare versions in code", "success": ["parse('1.2.3') returns (1, 2, 3)"],
+              "failure": ["parse('x') raises ValueError"]}
+    plan = {"sprint": sprint, "workflow": "tdd", "stories": [{"id": f"S{sprint}-01", "title": "Parse versions",
+            "tasks": [{"id": f"S{sprint}-01-T1", "title": "parse MAJOR.MINOR.PATCH",
+                       "tests": ["tests/test_semver.py"], "targets": ["src/semver.py"]}]}]}
+    return {"intake": json.dumps(intent, indent=1),
+            "standards": "# Standards\n\nlanguage: python\ntest_command: python -m pytest -q\n",
+            "planner": json.dumps(plan, indent=1)}
+
+
+def planning_prompts(intent: str, sprint: int) -> dict[str, str]:
+    t = planning_templates(sprint)
+    files = {"intake": "docs/agents/intent.json", "standards": "docs/agents/standards.md",
+             "planner": f"docs/agents/sprint{sprint}/plan.json"}
+    what = {"intake": f"Intent: {intent}\nWrite the five-part intent for THIS intent. Every field is filled; "
+                      "success and failure are lists of concrete, testable strings.",
+            "standards": "Write the standards file. Keep the `test_command:` line exactly as a shell command.",
+            "planner": f"Intent: {intent}\nWrite the sprint plan for it. Task ids look like S{sprint}-NN-Tk; "
+                       "tests and targets are relative paths; workflow is tdd."}
+    return {r: f"{what[r]}\nCall write_artifact once with path {files[r]} and content in exactly this shape "
+               f"(valid {'JSON' if r != 'standards' else 'text'}, real values, no placeholders):\n{t[r]}\n"
+               "Then reply 'done'." for r in files}
 
 
 # ----------------------------------------------------------------------------------------
