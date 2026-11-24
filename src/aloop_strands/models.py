@@ -17,7 +17,16 @@ def route(role: str) -> str:
 
 
 def make_model(role: str):
-    return resolve_model(route(role), default=DEFAULT)
+    r = route(role)
+    if r.startswith("openai-chat/"):
+        # Any OpenAI-compatible Chat Completions endpoint (LM Studio, routers). harness "openai/"
+        # uses the Responses API, which such endpoints often lack.
+        # https://strandsagents.com/docs/user-guide/concepts/model-providers/openai/
+        from strands.models.openai import OpenAIModel
+        return OpenAIModel(client_args={"base_url": os.environ.get("OPENAI_BASE_URL"),
+                                        "api_key": os.environ.get("OPENAI_API_KEY") or "unused"},
+                           model_id=r.split("/", 1)[1])
+    return resolve_model(r, default=DEFAULT)
 
 
 # Non-secret model settings copied into the boxed worker; credentials go only through Box secret.ref.
