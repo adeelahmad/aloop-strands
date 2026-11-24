@@ -89,7 +89,11 @@ class Supervisor:
         self.log.append("dispatch", role=role, task="plan")
         agent = roles.build_agent(role, model=self.model_for(role), task="plan", worktree=self.root,
                                   project_root=self.root)
-        agent(prompt)
+        try:
+            agent(prompt)
+        except Exception as e:  # a model/provider failure is a block, never a crash or a pass
+            self.log.append("model.error", role=role, task="plan", error=f"{type(e).__name__}: {e}"[:500])
+            return base.Verdict.deny("gate.model_error", f"{role}: {type(e).__name__}: {e}"[:300])
         self._log_usage(agent, role, "plan", 1)
         check = {"intake": lambda: plan_gates.intake_verify(self.root),
                  "standards": lambda: plan_gates.standards_verify(self.root),
@@ -108,6 +112,7 @@ class Supervisor:
         for role in PLANNING:
             v = self._run_planning_role(role, prompts[role])
             if not v.allow:
+                self.log.append("plan.blocked", sprint=self.sprint, rule=v.rule, reason=v.reason)
                 return PlanState("blocked", self.sprint, reason=f"{v.rule}: {v.reason}")
         code = approvals.code_for(self.root, self.sprint)
         self.log.append("plan.ready", sprint=self.sprint, plan_sha=approvals.plan_sha(self.root, self.sprint))

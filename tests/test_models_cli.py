@@ -39,8 +39,11 @@ def test_cli_status_prints_code(tmp_path):
     d = tmp_path / "docs" / "agents" / "sprint1"
     d.mkdir(parents=True)
     (d / "plan.json").write_text("{}")
+    from aloop_strands import approvals
+    from aloop_strands.events import EventLog
+    EventLog(tmp_path).append("plan.ready", sprint=1, plan_sha=approvals.plan_sha(tmp_path, 1))
     r = run("status", "--root", str(tmp_path))
-    assert r.returncode == 0 and "code" in r.stdout
+    assert r.returncode == 0 and approvals.code_for(tmp_path, 1) in r.stdout
 
 
 def test_cli_run_refuses_without_box(tmp_path, monkeypatch):

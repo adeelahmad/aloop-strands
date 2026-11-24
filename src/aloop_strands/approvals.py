@@ -35,11 +35,22 @@ def code_for(root: Path, sprint: int) -> str:
     return plan_sha(root, sprint)[:8]
 
 
+def verified(root: Path, sprint: int) -> bool:
+    """True only when every planning gate passed on exactly the current plan files (plan.ready)."""
+    sha = plan_sha(root, sprint)
+    ready = [e for e in EventLog(root).query(kind="plan.ready", sprint=sprint)]
+    return bool(ready) and ready[-1].get("plan_sha") == sha
+
+
 def approve(root: Path, sprint: int, typed: str, actor: str) -> dict:
     if not actor.startswith("human:"):
         raise ApprovalRefused("only a human entry point may approve")
     log = EventLog(root)
     sha = plan_sha(root, sprint)
+    if not verified(root, sprint):
+        log.append("approval.refused", rule="gate.approval", verdict="deny", sprint=sprint, actor=actor,
+                   reason="no verified plan: planning gates have not passed on these exact files")
+        raise ApprovalRefused(f"sprint {sprint} has no verified plan; run plan again")
     if typed.strip().lower() != sha[:8]:
         log.append("approval.refused", rule="gate.approval", verdict="deny", sprint=sprint, actor=actor,
                    reason="typed code does not match this plan")

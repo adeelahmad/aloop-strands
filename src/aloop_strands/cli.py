@@ -130,6 +130,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "status":
         from . import approvals
         ok, why = approvals.approved(Path(a.root), a.sprint)
+        if not ok and not approvals.verified(Path(a.root), a.sprint):
+            print(f"sprint {a.sprint}: no verified plan (planning blocked or not run)")
+            return 0
         print(f"sprint {a.sprint}: {why}; code {approvals.code_for(Path(a.root), a.sprint)}")
         return 0
     if a.cmd == "serve":
