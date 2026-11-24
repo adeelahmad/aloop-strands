@@ -1,0 +1,48 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e '.[test]'
+      - run: pytest
+  box:
+    # Same suite with Strands Box installed: the Box tests and the in-Box e2e run instead of skipping.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: allow unprivileged user namespaces (Box needs them; Ubuntu 24.04 restricts them via AppArmor)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: restore Box build
+        id: boxcache
+        uses: actions/cache@v4
+        with:
+          path: ~/box-core
+          key: box-${{ runner.os }}-8c26868a952e954ba1b99b7d7bf46b67da94f4c5
+      - name: build Strands Box from the pinned source revision (same pin as the Dockerfile)
+        if: steps.boxcache.outputs.cache-hit != 'true'
+        run: |
+          git init /tmp/box-src && git -C /tmp/box-src remote add origin https://github.com/strands-agents/box.git
+          git -C /tmp/box-src fetch --depth 1 origin 8c26868a952e954ba1b99b7d7bf46b67da94f4c5 && git -C /tmp/box-src checkout --detach FETCH_HEAD
+          cd /tmp/box-src && cargo build --locked --release -p strands-box -p strands-box-containment
+          mkdir -p ~/box-core && cp target/release/strands-box ~/box-core/box
+          cp target/release/strands-box-sock-alias target/release/strands-box-contain-trampoline ~/box-core/
+      - run: echo "ALOOP_BOX_BIN=$HOME/box-core/box" >> "$GITHUB_ENV"
+      - run: test -n "$ALOOP_BOX_BIN" && "$ALOOP_BOX_BIN" --version
+      - run: pip install -e '.[test]'
+      - run: pytest -rs tests/test_box.py tests/test_e2e.py
+        env:
+          ALOOP_REQUIRE_BOX: "1"

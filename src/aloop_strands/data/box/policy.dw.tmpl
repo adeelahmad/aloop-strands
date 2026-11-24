@@ -1,0 +1,41 @@
+// aloop-strands default policy for one task's box. Default deny: anything no rule permits is refused.
+// Rendered per task: the WORKTREE placeholder becomes the task worktree; model egress rules are added for worker boxes only.
+// Pinned with the gates (.aladdin/pins.json); changing it needs the human's approval code.
+// Docs: https://strandsagents.com/docs/user-guide/box/policies/
+
+@id("shell_commands")
+permit (principal, action == Box::Action::"shell:exec", resource);
+
+@id("spawn_toolchain")
+@description("Only the project's toolchain: Python and git.")
+permit (principal, action == Box::Action::"shell:spawn", resource)
+when { ["python", "python3", "git"].contains(context.input.program) };
+
+@id("worktree_rw")
+@description("Project-scoped file access: this task's worktree only.")
+permit (principal, action in [Box::Action::"fs:read", Box::Action::"fs:write"], resource)
+when { context.input.path == "{{WORKTREE}}" || context.input.path like "{{WORKTREE}}/*" || context.input.path == "/dev/null" };
+
+@id("gate_files_hidden")
+@description("Workers never read or change gate config, workflows, the box policy or run state.")
+forbid (principal, action in [Box::Action::"fs:read", Box::Action::"fs:write", Box::Action::"fs:delete", Box::Action::"fs:move"], resource)
+when {
+  context.input.path like "{{WORKTREE}}/gates*" || context.input.path like "{{WORKTREE}}/workflows*" ||
+  context.input.path like "{{WORKTREE}}/box*" || context.input.path like "{{WORKTREE}}/.aladdin*"
+};
+
+@id("test_before_commit")
+@description("Commit only after the tests passed in the last hour (test_command runs as `python -m ...`).")
+forbid (principal, action == Box::Action::"shell:spawn", resource)
+when { context.input.program == "git" && context.input has arg1 && context.input.arg1 == "commit" }
+unless temporal {
+  formerly within 1h (
+    Box::Action::"shell:spawn"::response{ input.program: "python", input.arg1: "-m", output.status: 0 }
+  )
+};
+
+@id("no_git_push")
+@description("Nothing leaves the box through git.")
+forbid (principal, action == Box::Action::"shell:spawn", resource)
+when { context.input.program == "git" && context.input has arg1 && ["push", "remote", "fetch", "pull", "clone"].contains(context.input.arg1) };
+{{EGRESS_RULES}}

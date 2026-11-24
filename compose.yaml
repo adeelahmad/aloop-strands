@@ -1,0 +1,32 @@
+# Local: dashboard on 127.0.0.1:8787, project mounted at /work.
+#   ALOOP_MODEL=bedrock/global.anthropic.claude-sonnet-4-6 docker compose up dashboard
+#   docker compose run --rm cli plan "a semver parser"
+#   docker compose run --rm cli approve <code>
+#   docker compose run --rm cli run
+# Box needs user namespaces and must set up its own sandbox: the Box docs record that a default Docker
+# profile refuses this, so seccomp is unconfined here (as in Box's EKS example) and /proc is unmasked.
+# No secrets in the image: the model key comes from your environment and Box swaps it in at its gateway.
+x-aloop: &aloop
+  build: .
+  image: aloop-strands:local
+  volumes:
+    - ${ALOOP_PROJECT:-./work}:/work
+  environment:
+    ALOOP_MODEL: ${ALOOP_MODEL:-bedrock/global.anthropic.claude-sonnet-4-6}
+    ALOOP_MODEL_HOST: ${ALOOP_MODEL_HOST:-bedrock-runtime.us-west-2.amazonaws.com}
+    ALOOP_MODEL_SECRET_ENV: ${ALOOP_MODEL_SECRET_ENV:-AWS_BEARER_TOKEN_BEDROCK}
+    AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+    AWS_REGION: ${AWS_REGION:-us-west-2}
+  security_opt:
+    - seccomp=unconfined
+    - apparmor=unconfined
+    - systempaths=unconfined
+services:
+  dashboard:
+    <<: *aloop
+    command: ["serve", "--root", "/work", "--host", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:8787:8787"
+  cli:
+    <<: *aloop
+    profiles: ["cli"]

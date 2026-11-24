@@ -1,0 +1,9 @@
+# Default workflow ("kernel module"): strict TDD, aloop's execution phase.
+# Each step names its role and the gate that must pass before the next step runs.
+name: tdd
+steps:
+  - {id: red,        role: red,                gate: gate.red}
+  - {id: scaffold,   role: scaffold,           gate: gate.scaffold}
+  - {id: green,      role: green,              gate: gate.green}
+  - {id: review,     role: structural_review,  gate: gate.structural}
+  - {id: final,      role: final_verification, gate: gate.final}

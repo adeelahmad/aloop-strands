@@ -1,0 +1,63 @@
+# Role tool table and paths hidden from workers. Mirrors gates/tool_gates.py (a test keeps them equal).
+# Pinned by .aladdin/pins.json: a change needs the human's approval code.
+protected_paths:
+- gates
+- workflows
+- box
+- .aladdin
+- .agentic
+- .git
+roles:
+  developer:
+  - edit_file
+  - list_files
+  - read_file
+  - run_tests
+  - write_file
+  final_verification:
+  - list_files
+  - read_file
+  - run_tests
+  - write_report
+  green:
+  - edit_file
+  - list_files
+  - read_file
+  - run_tests
+  - write_file
+  intake:
+  - list_files
+  - read_file
+  - write_artifact
+  mission_planner:
+  - list_files
+  - read_file
+  - write_artifact
+  planner:
+  - list_files
+  - read_file
+  - write_artifact
+  red:
+  - edit_file
+  - list_files
+  - read_file
+  - run_tests
+  - write_file
+  scaffold:
+  - edit_file
+  - list_files
+  - read_file
+  - run_tests
+  - write_file
+  standards:
+  - list_files
+  - read_file
+  - write_artifact
+  structural_review:
+  - list_files
+  - read_file
+  - run_tests
+  - write_report
+  supervisor:
+  - list_files
+  - read_file
