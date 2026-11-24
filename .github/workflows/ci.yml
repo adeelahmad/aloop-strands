@@ -16,3 +16,22 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -e '.[test]'
       - run: pytest
+  box:
+    # Same suite with Strands Box installed: the Box tests and the in-Box e2e run instead of skipping.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: allow unprivileged user namespaces (Box needs them; Ubuntu 24.04 restricts them via AppArmor)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: install Strands Box
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/strands-agents/box/main/install.sh | BOX_NO_MODIFY_PATH=1 sh
+          echo "ALOOP_BOX_BIN=$(ls $HOME/.local/bin/box $HOME/.box/bin/box 2>/dev/null | head -1)" >> "$GITHUB_ENV"
+      - run: test -n "$ALOOP_BOX_BIN" && "$ALOOP_BOX_BIN" --version
+      - run: pip install -e '.[test]'
+      - run: pytest -rs tests/test_box.py tests/test_e2e.py
+        env:
+          ALOOP_REQUIRE_BOX: "1"

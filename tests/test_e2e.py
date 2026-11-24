@@ -101,3 +101,45 @@ def test_negative_worker_weakens_test(proj):
     sup = run_to_approval(proj, S.models(green_turns=green))
     assert sup.execute().status == "done"  # the edit was denied at the tool gate, GREEN still passed honestly
     assert 'assert parse("1.2.3") == (1, 2, 3)' in git(proj, "show", "main:tests/test_semver.py")
+
+
+# --- inside Box ---------------------------------------------------------------------
+from aloop_strands import box as _box  # noqa: E402
+
+needs_box = pytest.mark.skipif(not _box.find_box(), reason="no box binary (ALOOP_BOX_BIN)")
+
+
+def run_to_approval_box(root, models):
+    sup = supervisor.Supervisor(root, models=models, box_bin=_box.find_box())
+    st = sup.plan("a semver parser")
+    approvals.approve(root, 1, st.code, actor="human:test")
+    return sup
+
+
+@needs_box
+def test_semver_in_box_reaches_main(proj):
+    sup = run_to_approval_box(proj, S.models())
+    r = sup.execute()
+    assert r.status == "done", r.reason
+    assert "def parse" in git(proj, "show", "main:src/semver.py")
+    log = EventLog(proj)
+    assert log.verify() == (True, None)
+    exits = list(log.query(kind="worker.exit"))
+    assert exits and all(e["box"] and e["exit"] == 0 for e in exits)
+    roles_in_box = {e["role"] for e in exits}
+    assert {"red", "scaffold", "green", "structural_review", "final_verification"} <= roles_in_box
+    assert list(log.query(kind="box.run"))  # tests ran in boxes too
+
+
+@needs_box
+def test_negative_in_box_gate_edit_and_escape_blocked(proj, tmp_path):
+    outside = tmp_path / "pwned.py"
+    green = [S.w("write_file", "gates/role.yaml", "allow: everything\n"),
+             S.w("write_file", str(outside), "x"),
+             S.w("write_file", "src/semver.py", S.IMPL), "done"]
+    sup = run_to_approval_box(proj, S.models(green_turns=green))
+    assert sup.execute().status == "done"
+    assert not outside.exists()
+    assert "allow: everything" not in git(proj, "show", "main:gates/role.yaml")
+    ex = [e for e in EventLog(proj).query(kind="worker.exit") if e["role"] == "green"]
+    assert ex[-1]["reported_denials"] >= 2

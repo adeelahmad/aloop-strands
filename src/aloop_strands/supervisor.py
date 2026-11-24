@@ -26,8 +26,10 @@ class PlanState:
 
 class Supervisor:
     def __init__(self, root: Path | str, models: dict | None = None, model_factory: Callable | None = None,
-                 sprint: int = 1):
+                 sprint: int = 1, box_bin: str | None = None, model_host: str | None = None,
+                 secret_env: str | None = None):
         self.root = Path(root)
+        self.box_bin, self.model_host, self.secret_env = box_bin, model_host, secret_env
         self.models = models or {}
         self.model_factory = model_factory
         self.sprint = sprint
@@ -119,8 +121,14 @@ def _test_cmd(root: Path) -> str:
     return m.group(1).strip() if m else "python -m pytest -q"
 
 
-def _execute(self: Supervisor, max_attempts: int = 3, executor=local_executor) -> ExecState:
+def _execute(self: Supervisor, max_attempts: int = 3, executor=None) -> ExecState:
     root, sprint = self.root, self.sprint
+    if executor is None:
+        if self.box_bin:
+            from .box import BoxExecutor
+            executor = BoxExecutor(self.box_bin, project_root=root, log=self.log)
+        else:
+            executor = local_executor
     ok, why = approvals.approved(root, sprint)
     if not ok:
         self.log.append("execute.refused", rule="gate.approval", verdict="deny", reason=why)
@@ -182,10 +190,8 @@ def _run_task(self: Supervisor, task: dict, steps, test_cmd: str, max_attempts: 
         step_base = project.git(wt, "rev-parse", "HEAD").strip()
         why = None
         for attempt in range(1, max_attempts + 1):
-            self.log.append("dispatch", role=step.role, task=tid, attempt=attempt)
-            agent = roles.build_agent(step.role, model=self.model_for(step.role), task=tid, worktree=wt,
-                                      project_root=self.root, test_cmd=test_cmd, executor=executor)
-            agent(_prompt(task, step, why))
+            self.log.append("dispatch", role=step.role, task=tid, attempt=attempt, box=bool(self.box_bin))
+            self._run_worker(step.role, tid, wt, test_cmd, executor, _prompt(task, step, why))
             base_commit = start if step.role in ("structural_review", "developer") else step_base
             sctx = sg.StopContext(role=step.role, task=tid, worktree=wt, base=base_commit, log=self.log,
                                   test_cmd=shlex.split(test_cmd), red_commit=commits.get("red"), executor=executor)
@@ -229,10 +235,8 @@ def _sprint_step(self: Supervisor, step, test_cmd: str, max_attempts: int, execu
     wt = self.root / ".worktrees" / tid
     project.git(self.root, "worktree", "add", "-q", "--detach", str(wt), "main")
     try:
-        self.log.append("dispatch", role=step.role, task=tid, attempt=1)
-        agent = roles.build_agent(step.role, model=self.model_for(step.role), task=tid, worktree=wt,
-                                  project_root=self.root, test_cmd=test_cmd, executor=executor)
-        agent("Run the full test matrix on main and report.")
+        self.log.append("dispatch", role=step.role, task=tid, attempt=1, box=bool(self.box_bin))
+        self._run_worker(step.role, tid, wt, test_cmd, executor, "Run the full test matrix on main and report.")
         sctx = sg.StopContext(role=step.role, task=tid, worktree=wt, base="HEAD", log=self.log,
                               test_cmd=shlex.split(test_cmd), executor=executor)
         return self._stop(step, tid, wt, sctx)
@@ -240,6 +244,31 @@ def _sprint_step(self: Supervisor, step, test_cmd: str, max_attempts: int, execu
         project.git(self.root, "worktree", "remove", "--force", str(wt))
 
 
+def _run_worker(self: Supervisor, role: str, tid: str, wt: Path, test_cmd: str, executor, prompt: str) -> None:
+    if not self.box_bin:
+        agent = roles.build_agent(role, model=self.model_for(role), task=tid, worktree=wt,
+                                  project_root=self.root, test_cmd=test_cmd, executor=executor)
+        agent(prompt)
+        return
+    import sys as _sys
+    from .events import EventLog as _Log
+    from .scripted import ScriptedModel
+    outbox = self.root / ".aladdin" / "outbox" / f"{tid}-{role}"
+    outbox.mkdir(parents=True, exist_ok=True)
+    model = self.models.get(role)
+    spec = {"role": role, "task": tid, "worktree": str(wt.resolve()), "outbox": str(outbox.resolve()),
+            "test_cmd": test_cmd, "prompt": prompt,
+            "script": list(model.turns) if isinstance(model, ScriptedModel) else None}
+    r = executor.run(["python", "-m", "aloop_strands.worker", json.dumps(spec)], wt, 1800,
+                     extra_rw=[str(outbox.resolve())],
+                     model_host=None if spec["script"] is not None else self.model_host,
+                     secret_env=self.secret_env)
+    reported = list(_Log(outbox).query(kind="gate.decision"))
+    self.log.append("worker.exit", role=role, task=tid, exit=r.returncode, box=True,
+                    reported_denials=sum(1 for e in reported if e["verdict"] == "deny"))
+
+
+Supervisor._run_worker = _run_worker
 Supervisor.execute = _execute
 Supervisor._run_task = _run_task
 Supervisor._merge = _merge

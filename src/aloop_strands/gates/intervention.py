@@ -20,8 +20,8 @@ from . import base, tool_gates
 
 
 class GateIntervention(InterventionHandler):
-    def __init__(self, role: str, task: str, worktree: Path, project_root: Path):
-        self.role, self.task = role, task
+    def __init__(self, role: str, task: str, worktree: Path, project_root: Path, check_pins: bool = True):
+        self.role, self.task, self.check_pins = role, task, check_pins
         self.worktree, self.project_root = Path(worktree), Path(project_root)
         self.log = EventLog(self.project_root)
 
@@ -39,6 +39,9 @@ class GateIntervention(InterventionHandler):
                                 input=inp if isinstance(inp, dict) else {"path": inp}, log=self.log)
 
     def before_invocation(self, event, **kwargs):
+        if not self.check_pins:  # inside a box: the host verified pins before dispatch; gates are not mounted
+            return Proceed()
+
         def pins_gate(_ctx):
             diff = pins.verify(self.project_root)
             if diff:

@@ -26,9 +26,10 @@ PROMPTS = {
 }
 
 
-def build_agent(role: str, *, model, task: str, worktree: Path, project_root: Path, **tool_kw) -> Agent:
+def build_agent(role: str, *, model, task: str, worktree: Path, project_root: Path, check_pins: bool = True,
+                **tool_kw) -> Agent:
     if role not in ROLE_TOOLS:
         raise ValueError(f"unknown role {role!r}")
     tools = make_tools(ROLE_TOOLS[role], worktree, project_root, task, **tool_kw)
     return Agent(model=model, tools=tools, system_prompt=PROMPTS[role], callback_handler=None,
-                 interventions=[GateIntervention(role, task, worktree, project_root)])
+                 interventions=[GateIntervention(role, task, worktree, project_root, check_pins=check_pins)])
