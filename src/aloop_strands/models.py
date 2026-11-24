@@ -18,3 +18,12 @@ def route(role: str) -> str:
 
 def make_model(role: str):
     return resolve_model(route(role), default=DEFAULT)
+
+
+# Non-secret model settings copied into the boxed worker; credentials go only through Box secret.ref.
+PASSTHROUGH = ("ALOOP_MODEL", "ALOOP_MODEL_PLANNING", "ALOOP_MODEL_WORKER", "AWS_REGION",
+               "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL")
+
+
+def worker_env() -> dict:
+    return {k: v for k, v in os.environ.items() if k in PASSTHROUGH}
