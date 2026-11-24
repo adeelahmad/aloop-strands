@@ -73,7 +73,19 @@ def is_test_path(rel: str) -> bool:
             or p.name == "conftest.py" or ".test." in p.name or ".spec." in p.name)
 
 
+ARTIFACT_DIRS = {"write_artifact": "docs/agents/", "write_report": "docs/agents/reports/"}
+
+
 def role_files_gate(ctx: GateContext) -> Verdict:
+    if ctx.tool in ARTIFACT_DIRS:
+        wt = Path(os.path.realpath(ctx.worktree))
+        for raw in _paths(ctx):
+            full, why = _resolve(ctx, raw)
+            if full is None:
+                return Verdict.deny("gate.scope", why)
+            if not (full.relative_to(wt).as_posix() + "/").startswith(ARTIFACT_DIRS[ctx.tool]):
+                return Verdict.deny("gate.artifact_scope", f"{ctx.tool} writes only under {ARTIFACT_DIRS[ctx.tool]}")
+        return Verdict.ok("gate.role_files")
     if ctx.tool not in WRITE_TOOLS:
         return Verdict.ok("gate.role_files")
     wt = Path(os.path.realpath(ctx.worktree))

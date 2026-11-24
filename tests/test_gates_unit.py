@@ -156,3 +156,12 @@ def test_evaluate_logs_every_decision(proj):
     rows = list(c.log.query(kind="gate.decision"))
     assert rows and rows[-1]["verdict"] == "deny" and rows[-1]["rule"] == "gate.integrity"
     assert {"reason", "role", "task", "tool", "commit"} <= set(rows[-1])
+
+
+def test_unrecordable_decision_is_a_deny(proj):
+    c = ctx(proj, role="green", tool="read_file", path="src/a.py")
+    c.log.append("x", n=1)
+    c.log.path.write_text(c.log.path.read_text().replace('"n": 1', '"n": 2'))
+    v = base.evaluate(tg.TOOL_GATES, c)
+    assert not v.allow and v.rule == "gate.log_integrity"
+    assert (c.log.path.with_name("alarms.jsonl")).exists()

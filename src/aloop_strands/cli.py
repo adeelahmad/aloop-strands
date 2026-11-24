@@ -45,7 +45,49 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("repin")
     p.add_argument("root")
     p.add_argument("code")
+    p = sub.add_parser("plan", help="intent -> intake, standards, planner; stops for approval")
+    p.add_argument("intent")
+    p.add_argument("--root", default=".")
+    p = sub.add_parser("approve", help="approve the current plan with its code (human only)")
+    p.add_argument("code")
+    p.add_argument("--root", default=".")
+    p.add_argument("--sprint", type=int, default=1)
+    p = sub.add_parser("status")
+    p.add_argument("--root", default=".")
+    p.add_argument("--sprint", type=int, default=1)
+    p = sub.add_parser("serve", help="local dashboard on 127.0.0.1")
+    p.add_argument("--root", default=".")
+    p.add_argument("--port", type=int, default=8787)
     a = ap.parse_args(argv)
+    if a.cmd == "plan":
+        from .models import make_model
+        from .supervisor import Supervisor
+        st = Supervisor(Path(a.root), model_factory=make_model).plan(a.intent)
+        if st.status != "awaiting_approval":
+            print(f"BLOCK {st.reason}")
+            return 2
+        print(f"plan ready. approve with: aloop-strands approve {st.code}")
+        return 0
+    if a.cmd == "approve":
+        from . import approvals
+        try:
+            approvals.approve(Path(a.root), a.sprint, a.code, actor="human:cli")
+        except approvals.ApprovalRefused as e:
+            print(f"BLOCK {e}")
+            return 2
+        print("approved")
+        return 0
+    if a.cmd == "status":
+        from . import approvals
+        ok, why = approvals.approved(Path(a.root), a.sprint)
+        print(f"sprint {a.sprint}: {why}; code {approvals.code_for(Path(a.root), a.sprint)}")
+        return 0
+    if a.cmd == "serve":
+        from .dashboard import make_server
+        srv = make_server(Path(a.root), port=a.port)
+        print(f"dashboard on http://127.0.0.1:{srv.server_address[1]}")
+        srv.serve_forever()
+        return 0
     if a.cmd == "init":
         return _init(Path(a.root))
     if a.cmd == "verify":

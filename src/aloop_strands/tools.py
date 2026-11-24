@@ -85,7 +85,14 @@ def make_tools(role_tools: frozenset[str], worktree: Path, project_root: Path, t
         f.write_text(content)
         return f"wrote {path}"
 
-    write_report = write_artifact
+    @tool
+    def write_report(path: str, content: str) -> str:
+        """Write a review report under docs/agents/reports/."""
+        f = _inside(wt, path)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+        return f"wrote {path}"
+
     available = {"read_file": read_file, "list_files": list_files, "write_file": write_file,
                  "edit_file": edit_file, "run_tests": run_tests, "write_artifact": write_artifact}
     out = [available[n] for n in sorted(role_tools) if n in available]

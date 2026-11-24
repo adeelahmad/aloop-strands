@@ -9,8 +9,8 @@ are our own deterministic gates.
 | Milestone | Exit criterion | Status |
 | --- | --- | --- |
 | M0 Skeleton | package, CLI, hash-chained event log, pins; tamper tests | ✅ |
-| M1 Gates | every gate: pass, block, crash-blocks, tamper tests; no handler fails open; Box spike | ⬜ |
-| M2 Plan | no execution role before approval of the current plan sha; changed plan voids it | ⬜ |
+| M1 Gates | every gate: pass, block, crash-blocks, tamper tests; no handler fails open; Box spike | ✅ gates (Box spike in M3) |
+| M2 Plan | no execution role before approval of the current plan sha; changed plan voids it | ✅ |
 | M3 Execute | e2e "a semver parser" → merged code on main inside Box; negative e2e (gate edit, out-of-worktree write, commit without tests) blocked and logged | ⬜ |
 | M4 Mission, budgets | one-way door waits for a human token; hard budget breach stops and discards | ⬜ |
 | M5 Ship | Dockerfile, compose, DEPLOY.md (EKS, AgentCore), conformance report vs aloop ROADMAP §6 | ⬜ |

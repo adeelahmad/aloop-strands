@@ -6,13 +6,14 @@ is a deny. `evaluate` runs gates in order, stops at the first deny, and logs eve
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from ..events import EventLog
+from ..events import ChainBroken, EventLog
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,14 @@ def evaluate(gates: list[Gate], ctx: GateContext) -> Verdict:
         if not v.allow:
             verdict = v
             break
-    ctx.log.append("gate.decision", rule=verdict.rule, verdict="allow" if verdict.allow else "deny",
-                   reason=verdict.reason, role=ctx.role, task=ctx.task, tool=ctx.tool,
-                   commit=head_commit(ctx.worktree))
+    rec = dict(rule=verdict.rule, verdict="allow" if verdict.allow else "deny", reason=verdict.reason,
+               role=ctx.role, task=ctx.task, tool=ctx.tool, commit=head_commit(ctx.worktree))
+    try:
+        ctx.log.append("gate.decision", **rec)
+    except ChainBroken as e:
+        # A decision that cannot be recorded is not made: deny, and leave an unchained alarm.
+        alarm = ctx.log.path.with_name("alarms.jsonl")
+        with open(alarm, "a") as f:
+            f.write(json.dumps({"ts": time.time(), "alarm": "log_integrity", "decision": rec}) + "\n")
+        return Verdict.deny("gate.log_integrity", str(e))
     return verdict
