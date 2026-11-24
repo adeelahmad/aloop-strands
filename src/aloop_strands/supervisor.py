@@ -238,6 +238,14 @@ def _run_task(self: Supervisor, task: dict, steps, test_cmd: str, max_attempts: 
         for attempt in range(1, max_attempts + 1):
             self.log.append("dispatch", role=step.role, task=tid, attempt=attempt, box=bool(self.box_bin))
             bv = self._run_worker(step.role, tid, wt, test_cmd, executor, _prompt(task, step, why), attempt)
+            if bv is not None and bv.rule == "gate.worker_error":  # partial work discarded, then retry
+                project.git(wt, "reset", "-q", "--hard", step_base)
+                project.git(wt, "clean", "-qfdx")
+                why = bv.reason
+                if attempt == max_attempts:
+                    self.log.append("task.blocked", task=tid, step=step.id, reason=f"{bv.rule}: {bv.reason}")
+                    return ExecState("blocked", f"{tid} {step.id}: {bv.rule}: {bv.reason}")
+                continue
             if bv is not None:  # hard budget breach: partial work is discarded, never merged
                 project.git(wt, "reset", "-q", "--hard", step_base)
                 project.git(wt, "clean", "-qfdx")
@@ -313,7 +321,11 @@ def _run_worker(self: Supervisor, role: str, tid: str, wt: Path, test_cmd: str, 
         agent = roles.build_agent(role, model=self.model_for(role), task=tid, worktree=wt,
                                   project_root=self.root, test_cmd=test_cmd, executor=executor,
                                   extra_interventions=[bi])
-        agent(prompt)
+        try:
+            agent(prompt)
+        except Exception as e:  # a provider/model failure is a worker error: retried, never a pass
+            self._log_usage(agent, role, tid, attempt)
+            return _worker_error(self, role, tid, attempt, f"{type(e).__name__}: {e}")
         self._log_usage(agent, role, tid, attempt)
         return bi.breached
     import sys as _sys
@@ -345,7 +357,15 @@ def _run_worker(self: Supervisor, role: str, tid: str, wt: Path, test_cmd: str, 
                     estimated=False, reported_by="worker-in-box")
     if out.get("breach"):
         return base.Verdict.deny(out["breach"]["rule"], out["breach"]["reason"])
+    if r.returncode != 0 and "stop_reason" not in out:  # the worker died before reporting a result
+        tail = [ln for ln in (r.stderr or "").splitlines() if ln.strip()][-3:]
+        return _worker_error(self, role, tid, attempt, " | ".join(tail) or f"exit {r.returncode}")
     return None
+
+
+def _worker_error(self: Supervisor, role: str, tid: str, attempt: int, error: str) -> base.Verdict:
+    self.log.append("worker.error", role=role, task=tid, attempt=attempt, error=error[:1000])
+    return base.Verdict.deny("gate.worker_error", f"{role} worker failed: {error[:300]}")
 
 
 Supervisor._run_worker = _run_worker
