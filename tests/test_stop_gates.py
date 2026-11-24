@@ -210,3 +210,12 @@ def test_runner_crash_blocks(repo):
     from aloop_strands.gates.base import run_gate
     v = run_gate(sg.final_verify, c)
     assert not v.allow
+
+
+def test_red_must_fail_reason_names_the_passing_tests(repo):
+    # Live run: RED retried 3x blind; the retry must see which tests already pass.
+    wt, base = repo
+    (wt / "tests" / "test_trivial.py").write_text("def test_empty_is_rejected():\n    assert True\n")
+    v = sg.red_verify(ctx(repo, "red", base))
+    assert v.rule == "gate.red.must_fail" and "test_empty_is_rejected" in v.reason
+    assert "already" in v.reason

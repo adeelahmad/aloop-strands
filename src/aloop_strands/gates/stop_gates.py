@@ -76,7 +76,11 @@ def red_verify(ctx: StopContext) -> Verdict:
             return Verdict.deny("gate.red.syntax", f"{t} does not compile: {e.msg}")
     code, out = _run(ctx)
     if code == 0:
-        return Verdict.deny("gate.red.must_fail", "RED tests pass at first run; they prove nothing")
+        _, listing = _run(ctx, ["-rA", "-q"])
+        passed = [ln.split(" ", 1)[1] for ln in listing.splitlines() if ln.startswith("PASSED ")][:20]
+        return Verdict.deny("gate.red.must_fail", "RED tests pass at first run; they prove nothing. "
+                            f"These already pass on the current code: {passed or listing[-400:]}. "
+                            "Test behaviour the code does not have yet.")
     if code == 5:
         return Verdict.deny("gate.red.has_tests", "no tests were collected")
     return Verdict.ok("gate.red", f"tests fail as required (exit {code})")
