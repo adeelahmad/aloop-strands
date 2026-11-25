@@ -230,3 +230,25 @@ def test_plan_edited_after_verification_cannot_be_approved(proj):
     (proj / "docs/agents/standards.md").write_text("# Standards\ntest_command: true\n")
     with pytest.raises(approvals.ApprovalRefused):
         approvals.approve(proj, sprint=1, typed=approvals.code_for(proj, 1), actor="human:cli")
+
+
+class _FlakyOnce(ScriptedModel):
+    def __init__(self, turns):
+        super().__init__(turns)
+        self.failed = False
+
+    async def stream(self, *a, **k):
+        if not self.failed:
+            self.failed = True
+            raise RuntimeError("APIConnectionError: Connection error.")
+        async for ev in super().stream(*a, **k):
+            yield ev
+
+
+def test_transient_model_error_in_planning_is_retried(proj):
+    # Live run (Ollama behind a tunnel): one dropped connection blocked the whole plan.
+    models = planning_models()
+    models["planner"] = _FlakyOnce(list(models["planner"].turns))
+    st = supervisor.Supervisor(proj, models=models).plan("a semver parser")
+    assert st.status == "awaiting_approval", st.reason
+    assert len(list(EventLog(proj).query(kind="model.error"))) == 1
