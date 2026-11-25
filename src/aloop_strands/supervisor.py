@@ -25,6 +25,9 @@ class PlanState:
     reason: str = ""
 
 
+PLAN_MODEL_ATTEMPTS = 3  # transient provider errors (dropped connections, 5xx)
+
+
 class Supervisor:
     def __init__(self, root: Path | str, models: dict | None = None, model_factory: Callable | None = None,
                  sprint: int = 1, box_bin: str | None = None, model_host: str | None = None,
@@ -89,11 +92,17 @@ class Supervisor:
         self.log.append("dispatch", role=role, task="plan")
         agent = roles.build_agent(role, model=self.model_for(role), task="plan", worktree=self.root,
                                   project_root=self.root)
-        try:
-            agent(prompt)
-        except Exception as e:  # a model/provider failure is a block, never a crash or a pass
-            self.log.append("model.error", role=role, task="plan", error=f"{type(e).__name__}: {e}"[:500])
-            return base.Verdict.deny("gate.model_error", f"{role}: {type(e).__name__}: {e}"[:300])
+        for attempt in range(1, PLAN_MODEL_ATTEMPTS + 1):
+            try:
+                agent(prompt)
+                break
+            except Exception as e:  # a model/provider failure is retried, then blocks; never a pass
+                self.log.append("model.error", role=role, task="plan", attempt=attempt,
+                                error=f"{type(e).__name__}: {e}"[:500])
+                if attempt == PLAN_MODEL_ATTEMPTS:
+                    return base.Verdict.deny("gate.model_error", f"{role}: {type(e).__name__}: {e}"[:300])
+                agent = roles.build_agent(role, model=self.model_for(role), task="plan", worktree=self.root,
+                                          project_root=self.root)
         self._log_usage(agent, role, "plan", 1)
         check = {"intake": lambda: plan_gates.intake_verify(self.root),
                  "standards": lambda: plan_gates.standards_verify(self.root),
